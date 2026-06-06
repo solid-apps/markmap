@@ -82,7 +82,7 @@
   }
 
   const { Transformer, Markmap, deriveOptions } = window.markmap
-  const MAPS = '/public/markmap/'                 // where maps live on the pod
+  const MAPS = location.origin + '/public/markmap/' // absolute — xlogin's authFetch rejects relative URLs
   const TEMPLATE = '# New map\n\n## First branch\n- a leaf\n- another\n\n## Second branch\n- [a link](https://example.com)\n'
   let mm = null            // Markmap instance
   let MD = ''              // current markdown (source of truth while editing)
@@ -120,12 +120,13 @@
     if (island && island.textContent.trim()) return { doc: JSON.parse(island.textContent), from: null }
     const src = new URLSearchParams(location.search).get('src')
     if (src) {
-      const r = await authFetch(src, { headers: { Accept: 'application/ld+json, application/json, text/markdown, text/plain' } })
+      const u = new URL(src, location.href)            // absolutize — xlogin's authFetch rejects relative URLs
+      const cross = u.origin !== location.origin
+      const r = await authFetch(u.href, { headers: { Accept: 'application/ld+json, application/json, text/markdown, text/plain' } })
       if (!r.ok) throw new Error(`load ${src} → ${r.status}`)
-      const cross = new URL(src, location.href).origin !== location.origin
       const ct = r.headers.get('content-type') || ''
-      if (ct.includes('json')) return { doc: await r.json(), from: { url: src, kind: 'jsonld', cross } }
-      return { doc: { 'schema:text': await r.text() }, from: { url: src, kind: 'md', cross } }
+      if (ct.includes('json')) return { doc: await r.json(), from: { url: u.href, kind: 'jsonld', cross } }
+      return { doc: { 'schema:text': await r.text() }, from: { url: u.href, kind: 'md', cross } }
     }
     const r = await fetch('sample.jsonld')
     return { doc: await r.json(), from: null }     // sample saves as a new map, never overwrites itself
@@ -166,9 +167,10 @@
     if (!r.ok) return saveFailed(r)
     FROM = { url, kind: 'jsonld', cross: false }
     DIRTY = false; setHeader()
-    history.replaceState(null, '', '?src=' + encodeURIComponent(url))
+    const path = new URL(url).pathname
+    history.replaceState(null, '', '?src=' + encodeURIComponent(path))
     const a = $('#srcLink'); a.href = url; a.style.display = ''
-    toast('Saved → ' + url)
+    toast('Saved → ' + path)
   }
 
   // --- edit -------------------------------------------------------------------
