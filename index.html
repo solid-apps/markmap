@@ -156,6 +156,7 @@
       ? await authFetch(FROM.url, { method: 'PUT', headers: { 'Content-Type': 'text/markdown' }, body: MD })
       : await authFetch(FROM.url, { method: 'PUT', headers: { 'Content-Type': 'application/ld+json' }, body: JSON.stringify(envelope(MD), null, 2) })
     if (!r.ok) return saveFailed(r)
+    markSelfWrite(FROM.url)
     DIRTY = false; setHeader(); toast('Saved')
   }
   async function saveAs() {
@@ -165,12 +166,51 @@
     await ensureMapsContainer()
     const r = await authFetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/ld+json' }, body: JSON.stringify(envelope(MD), null, 2) })
     if (!r.ok) return saveFailed(r)
+    markSelfWrite(url)
     FROM = { url, kind: 'jsonld', cross: false }
+    syncSubs()
     DIRTY = false; setHeader()
     const path = new URL(url).pathname
     history.replaceState(null, '', '?src=' + encodeURIComponent(path))
     const a = $('#srcLink'); a.href = url; a.style.display = ''
     toast('Saved → ' + path)
+  }
+
+  // --- live updates: Solid WS notifications (solid-0.1) -----------------------
+  // When another client (an agent, another device) changes the map doc we're
+  // viewing, the pod pushes `pub <uri>` and we re-render in place. Unsaved local
+  // edits are never clobbered — we warn instead. Map docs are public, so the
+  // browser WS (which can't send auth headers) subscribes fine.
+  const SELF_WRITES = {}                          // url -> ts; ignore our own write-echo
+  let LIVE = null, SUBBED = new Set()
+  const markSelfWrite = (url) => { SELF_WRITES[url] = Date.now() }
+  const wsEndpoint = () => (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/.notifications'
+  function liveSub(url) { if (!LIVE || LIVE.readyState !== 1 || !url || SUBBED.has(url)) return; LIVE.send('sub ' + url); SUBBED.add(url) }
+  function syncSubs() { if (FROM && !FROM.cross && FROM.url) liveSub(FROM.url) }
+  function connectLive() {
+    let ws
+    try { ws = new WebSocket(wsEndpoint()) } catch { return }
+    LIVE = ws
+    ws.onopen = () => { SUBBED = new Set(); syncSubs() }
+    ws.onmessage = (e) => { const m = String(e.data || ''); if (m.startsWith('pub ')) onPub(m.slice(4).trim()) }
+    ws.onerror = () => { try { ws.close() } catch { /* noop */ } }
+    ws.onclose = () => { LIVE = null; SUBBED = new Set(); setTimeout(connectLive, 3000) }
+  }
+  async function onPub(uri) {
+    if (!FROM || uri !== FROM.url) return
+    if (SELF_WRITES[uri] && Date.now() - SELF_WRITES[uri] < 2500) return   // our own write
+    if (DIRTY) { toast('Map changed on the pod — your unsaved edits are kept (Save overwrites)'); return }
+    try {
+      const r = await authFetch(FROM.url, { headers: { Accept: 'application/ld+json, application/json, text/markdown, text/plain' } })
+      if (!r.ok) return
+      const ct = r.headers.get('content-type') || ''
+      const fresh = ct.includes('json') ? extract(await r.json()).md : await r.text()
+      if (fresh == null || String(fresh) === MD) return
+      MD = String(fresh)
+      renderMap(MD); setHeader()
+      if (document.body.classList.contains('editing')) $('#editor').value = MD
+      toast('Updated from pod')
+    } catch { /* transient; next pub retries */ }
   }
 
   // --- edit -------------------------------------------------------------------
@@ -211,6 +251,7 @@
     if (md) { MD = String(md); renderMap(MD); setHeader() }
     else if (tree) { mm = Markmap.create($('#mm'), null, tree); $('#editBtn').style.display = 'none' } // tree docs are view-only
     else throw new Error('No markdown (schema:text) or node tree (mm:root) in the document.')
+    connectLive()
   } catch (e) {
     document.getElementById('map').innerHTML = '<div class="err">' + String((e && e.message) || e).replace(/</g, '&lt;') + '</div>'
   }

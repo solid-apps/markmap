@@ -44,6 +44,11 @@ Hit **Edit** (⌘E) and the markdown opens in a pane beside the map — the map 
   **Save as…** into your `/public/markmap/` — that's the fork.
 - **New** starts a blank map. The header title follows the `# root` heading.
 
+Maps are also **live**: the app subscribes to the pod's Solid WebSocket notifications,
+so when another client — an AI agent regenerating a map, or you on another device —
+changes the document you're viewing, it re-renders in place. Unsaved local edits are
+never clobbered; you get a warning instead (your **Save** then overwrites).
+
 ## Run
 
 Static — open `index.html`, or install via the **store** to `/public/apps/markmap/`.
