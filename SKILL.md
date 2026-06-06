@@ -43,13 +43,19 @@ Prepend YAML frontmatter to the markdown — passed to markmap's
 ---
 markmap:
   colorFreezeLevel: 2     # color by top-level branch
-  initialExpandLevel: 2   # collapse deeper levels initially
   maxWidth: 280           # wrap long nodes
 ---
 
 # Root
 ...
 ```
+
+**Gotcha — `initialExpandLevel`:** it collapses everything *deeper* than that level on
+load, so children (including clickable links) are **hidden until the user clicks each
+branch**. Only use it for big maps (~50+ nodes) where a fully-expanded view would be
+overwhelming; for small/medium maps **omit it** so the whole map — and its links — is
+visible at once. (Learned the hard way: a 6-branch map with `initialExpandLevel: 2`
+shipped with its Links branch invisibly folded.)
 
 ## Storage & viewing
 
