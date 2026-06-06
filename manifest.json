@@ -1,0 +1,13 @@
+{
+  "name": "markmap",
+  "short_name": "markmap",
+  "description": "Mindmaps from markdown on your Solid pod — JSON-LD in, interactive markmap out",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#7c3aed",
+  "background_color": "#faf9fc",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

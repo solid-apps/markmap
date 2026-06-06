@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>markmap</title>
+<link rel="icon" href="favicon.svg">
+<link rel="manifest" href="manifest.json">
+<style>
+  :root{--acc:#7c3aed;--ink:#1a1a2e;--line:#ece9f3;--bg:#faf9fc}
+  *{box-sizing:border-box} html,body{height:100%}
+  body{margin:0;background:var(--bg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;color:var(--ink);display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#fff;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:8px;font-weight:700}
+  .brand svg{display:block}
+  .title{font-weight:600;color:#4b3f63;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .spacer{flex:1}
+  .chip{font-size:12px;color:#6b7280;text-decoration:none;border:1px solid var(--line);padding:3px 10px;border-radius:999px;background:#fff;font-family:inherit}
+  .chip:hover{border-color:var(--acc);color:var(--acc)}
+  button.chip{cursor:pointer}
+  #map{flex:1;width:100%;min-height:0}
+  svg#mm{width:100%;height:100%;display:block}
+  .err{padding:30px;color:#9b2c2c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">
+    <svg width="20" height="20" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#7c3aed"/><g stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round"><path d="M6 12h4M13.5 12 17 7M13.5 12 17 12M13.5 12 17 17"/></g><g fill="#fff"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="7" r="1.5"/><circle cx="18" cy="12" r="1.5"/><circle cx="18" cy="17" r="1.5"/></g></svg>
+    markmap
+  </span>
+  <span class="title" id="docTitle"></span>
+  <span class="spacer"></span>
+  <a class="chip" id="srcLink" target="_blank" rel="noopener" style="display:none">source</a>
+  <button class="chip" id="fitBtn" title="Fit map to window">Fit</button>
+</header>
+<div id="map"><svg id="mm"></svg></div>
+
+<!-- Put your own map here to fork this app: a JSON-LD island with markdown in schema:text.
+<script type="application/ld+json" id="markmap-data">
+{ "@context": { "schema": "https://schema.org/", "mm": "https://solid-apps.github.io/markmap/ns#" },
+  "@id": "#this", "@type": "mm:Markmap", "schema:name": "My map",
+  "schema:text": "# Root\n## Branch\n- leaf" }
+</script>
+-->
+
+<script src="vendor/d3.min.js"></script>
+<script src="vendor/markmap-view.js"></script>
+<script src="vendor/markmap-lib.js"></script>
+<script>
+(async () => {
+  const $ = (s) => document.querySelector(s)
+  const S = (o, ...keys) => { for (const k of keys) { const v = o && o[k]; if (v != null) return v } }
+  const val = (v) => Array.isArray(v) ? val(v[0]) : (v && typeof v === 'object' && '@value' in v ? v['@value'] : v)
+
+  // doc sources, in order: data island → ?src=<url> (JSON-LD or raw .md) → sample.jsonld
+  async function loadDoc() {
+    const island = document.getElementById('markmap-data')
+    if (island && island.textContent.trim()) return { doc: JSON.parse(island.textContent), from: null }
+    const src = new URLSearchParams(location.search).get('src')
+    if (src) {
+      const r = await fetch(src, { headers: { Accept: 'application/ld+json, application/json, text/markdown, text/plain' } })
+      if (!r.ok) throw new Error(`load ${src} → ${r.status}`)
+      const ct = r.headers.get('content-type') || ''
+      if (ct.includes('json')) return { doc: await r.json(), from: src }
+      return { doc: { 'schema:text': await r.text() }, from: src }   // a raw .md URL works too
+    }
+    const r = await fetch('sample.jsonld')
+    return { doc: await r.json(), from: 'sample.jsonld' }
+  }
+
+  // tolerant extraction: markdown payload (preferred) or a prebuilt markmap node tree
+  function extract(doc) {
+    const nodes = doc['@graph'] ? [].concat(doc['@graph']) : [doc]
+    const hasMd = (x) => S(x, 'schema:text', 'mm:markdown', 'markdown', 'text', 'schema:articleBody', 'https://schema.org/text')
+    const n = nodes.find((x) => /markmap/i.test(JSON.stringify(x['@type'] || ''))) || nodes.find(hasMd) || nodes[0]
+    return {
+      md: val(hasMd(n)),
+      tree: S(n, 'mm:root', 'root'),
+      title: val(S(n, 'schema:name', 'name', 'dc:title', 'title', 'https://schema.org/name')) || ''
+    }
+  }
+
+  try {
+    const { doc, from } = await loadDoc()
+    const { md, tree, title } = extract(doc)
+    if (title) { $('#docTitle').textContent = title; document.title = title + ' · markmap' }
+    if (from) { const a = $('#srcLink'); a.href = from; a.style.display = '' }
+
+    const { Transformer, Markmap, deriveOptions } = window.markmap
+    let root, opts = null
+    if (md) {
+      const res = new Transformer().transform(String(md))
+      root = res.root
+      if (res.frontmatter && res.frontmatter.markmap) opts = deriveOptions(res.frontmatter.markmap)
+    } else if (tree) {
+      root = tree
+    } else {
+      throw new Error('No markdown (schema:text) or node tree (mm:root) in the document.')
+    }
+    const mm = Markmap.create($('#mm'), opts, root)
+    $('#fitBtn').onclick = () => mm.fit()
+  } catch (e) {
+    document.getElementById('map').innerHTML = '<div class="err">' + String((e && e.message) || e).replace(/</g, '&lt;') + '</div>'
+  }
+})()
+</script>
+</body>
+</html>

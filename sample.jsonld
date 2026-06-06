@@ -1,0 +1,10 @@
+{
+  "@context": {
+    "schema": "https://schema.org/",
+    "mm": "https://solid-apps.github.io/markmap/ns#"
+  },
+  "@id": "#this",
+  "@type": "mm:Markmap",
+  "schema:name": "Your pod, mapped",
+  "schema:text": "---\nmarkmap:\n  colorFreezeLevel: 2\n---\n\n# Your pod\n\n## Apps\n- **tasks** — realtime lists\n- **journal** — private entries\n- **webprompts** — AI video canvas\n- **nexus** — the 1990 browser, read-write\n- **markmap** — this map\n\n## Agents\n- Claude\n- Kimi (MCP)\n- GLM / opencode (MCP)\n- OpenClaw — *Charlie* (skill)\n\n## Data\n- /public/ — open to the web\n- /private/ — owner-only\n- JSON-LD everywhere\n- WAC ACLs = consent\n\n## Identity\n- WebID\n- Solid-OIDC\n- nostr\n"
+}
