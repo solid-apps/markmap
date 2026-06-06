@@ -105,8 +105,8 @@
   }
   function renderMap(md) {
     const { root, opts } = transform(md)
-    if (!mm) mm = Markmap.create($('#mm'), opts, root)
-    else mm.setData(root, opts || {})
+    if (!mm) { mm = Markmap.create($('#mm'), opts, root); return Promise.resolve() }
+    return mm.setData(root, opts || {})
   }
   function setHeader() {
     const t = titleOf(MD)
@@ -207,7 +207,8 @@
       const fresh = ct.includes('json') ? extract(await r.json()).md : await r.text()
       if (fresh == null || String(fresh) === MD) return
       MD = String(fresh)
-      renderMap(MD); setHeader()
+      await renderMap(MD); setHeader()
+      if (mm) mm.fit()                             // keep a growing map in view
       if (document.body.classList.contains('editing')) $('#editor').value = MD
       toast('Updated from pod')
     } catch { /* transient; next pub retries */ }
