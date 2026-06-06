@@ -31,6 +31,19 @@ bare `markdown` key also work, as does a prebuilt markmap node tree under `mm:ro
 Maps live on your pod at `/public/markmap/<name>.jsonld` by convention
 (`Content-Type: application/ld+json`); "fork" = copy the document to your own pod.
 
+## Edit & save
+
+Hit **Edit** (⌘E) and the markdown opens in a pane beside the map — the map re-renders
+**live as you type**. **Save** (⌘S) writes back to your pod via the universal
+[xlogin](https://github.com/solid-apps) sign-in:
+
+- A map loaded from `?src=` on your pod saves **back to the same document** — JSON-LD
+  docs save as JSON-LD, and a **raw `.md` saves back as markdown**, which makes markmap a
+  mindmap *editor* for your `pages`/`notes` documents, not just a viewer.
+- The sample, a data island, or a cross-origin `?src=` (someone else's map) goes through
+  **Save as…** into your `/public/markmap/` — that's the fork.
+- **New** starts a blank map. The header title follows the `# root` heading.
+
 ## Run
 
 Static — open `index.html`, or install via the **store** to `/public/apps/markmap/`.
