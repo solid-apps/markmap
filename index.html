@@ -18,9 +18,23 @@
   .chip{font-size:12px;color:#6b7280;text-decoration:none;border:1px solid var(--line);padding:3px 10px;border-radius:999px;background:#fff;font-family:inherit}
   .chip:hover{border-color:var(--acc);color:var(--acc)}
   button.chip{cursor:pointer}
-  #map{flex:1;width:100%;min-height:0}
+  .chip.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+  .chip.primary:hover{filter:brightness(1.08);color:#fff}
+  #saveBtn{display:none}
+  body.editing #saveBtn{display:inline-block}
+  #wrap{flex:1;display:flex;min-height:0}
+  #editorPane{display:none;flex-direction:column;width:0;background:#fff}
+  body.editing #editorPane{display:flex;width:42%;min-width:280px;border-right:1px solid var(--line)}
+  #editor{flex:1;border:0;outline:0;resize:none;padding:14px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#2a2440;background:#fff}
+  #map{flex:1;min-width:0}
   svg#mm{width:100%;height:100%;display:block}
   .err{padding:30px;color:#9b2c2c;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:#241d3d;color:#fff;padding:9px 16px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:all .25s;z-index:50;max-width:86vw}
+  .toast.show{opacity:1;transform:translateX(-50%)}
+  @media (max-width:700px){
+    body.editing #wrap{flex-direction:column}
+    body.editing #editorPane{width:100%;min-width:0;height:45%;border-right:0;border-bottom:1px solid var(--line)}
+  }
 </style>
 </head>
 <body>
@@ -32,9 +46,15 @@
   <span class="title" id="docTitle"></span>
   <span class="spacer"></span>
   <a class="chip" id="srcLink" target="_blank" rel="noopener" style="display:none">source</a>
+  <button class="chip" id="newBtn" title="Start a new map">New</button>
+  <button class="chip" id="editBtn" title="Edit the markdown (⌘E)">Edit</button>
+  <button class="chip primary" id="saveBtn" title="Save to your pod (⌘S)">Save</button>
   <button class="chip" id="fitBtn" title="Fit map to window">Fit</button>
 </header>
-<div id="map"><svg id="mm"></svg></div>
+<div id="wrap">
+  <div id="editorPane"><textarea id="editor" spellcheck="false" placeholder="# Root&#10;&#10;## Branch&#10;- leaf"></textarea></div>
+  <div id="map"><svg id="mm"></svg></div>
+</div>
 
 <!-- Put your own map here to fork this app: a JSON-LD island with markdown in schema:text.
 <script type="application/ld+json" id="markmap-data">
@@ -44,6 +64,7 @@
 </script>
 -->
 
+<script src="https://unpkg.com/xlogin"></script>
 <script src="vendor/d3.min.js"></script>
 <script src="vendor/markmap-view.js"></script>
 <script src="vendor/markmap-lib.js"></script>
@@ -52,54 +73,142 @@
   const $ = (s) => document.querySelector(s)
   const S = (o, ...keys) => { for (const k of keys) { const v = o && o[k]; if (v != null) return v } }
   const val = (v) => Array.isArray(v) ? val(v[0]) : (v && typeof v === 'object' && '@value' in v ? v['@value'] : v)
+  const authFetch = (u, o) => ((window.xlogin && window.xlogin.authFetch) || fetch)(u, o)
+  function toast(msg) {
+    let t = document.querySelector('.toast')
+    if (!t) { t = document.createElement('div'); t.className = 'toast'; document.body.appendChild(t) }
+    t.textContent = msg; t.classList.add('show')
+    clearTimeout(t._tid); t._tid = setTimeout(() => t.classList.remove('show'), 2600)
+  }
 
-  // doc sources, in order: data island → ?src=<url> (JSON-LD or raw .md) → sample.jsonld
+  const { Transformer, Markmap, deriveOptions } = window.markmap
+  const MAPS = '/public/markmap/'                 // where maps live on the pod
+  const TEMPLATE = '# New map\n\n## First branch\n- a leaf\n- another\n\n## Second branch\n- [a link](https://example.com)\n'
+  let mm = null            // Markmap instance
+  let MD = ''              // current markdown (source of truth while editing)
+  let FROM = null          // { url, kind: 'jsonld'|'md', cross: bool } | null (island/sample/new)
+  let DIRTY = false
+
+  const titleOf = (md) => ((String(md).replace(/^---\n[\s\S]*?\n---\n/, '').match(/^#\s+(.+)$/m) || [])[1] || '').trim()
+  const slugify = (s) => String(s || '').toLowerCase().replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'map'
+  const envelope = (md) => ({
+    '@context': { 'schema': 'https://schema.org/', 'mm': 'https://solid-apps.github.io/markmap/ns#' },
+    '@id': '#this', '@type': 'mm:Markmap',
+    'schema:name': titleOf(md) || 'Untitled map',
+    'schema:text': md
+  })
+
+  function transform(md) {
+    const res = new Transformer().transform(String(md || ''))
+    const opts = res.frontmatter && res.frontmatter.markmap ? deriveOptions(res.frontmatter.markmap) : null
+    return { root: res.root, opts }
+  }
+  function renderMap(md) {
+    const { root, opts } = transform(md)
+    if (!mm) mm = Markmap.create($('#mm'), opts, root)
+    else mm.setData(root, opts || {})
+  }
+  function setHeader() {
+    const t = titleOf(MD)
+    $('#docTitle').textContent = t
+    document.title = (t ? t + ' · ' : '') + 'markmap'
+  }
+
+  // --- load: data island → ?src= (JSON-LD or raw .md) → sample ---------------
   async function loadDoc() {
     const island = document.getElementById('markmap-data')
     if (island && island.textContent.trim()) return { doc: JSON.parse(island.textContent), from: null }
     const src = new URLSearchParams(location.search).get('src')
     if (src) {
-      const r = await fetch(src, { headers: { Accept: 'application/ld+json, application/json, text/markdown, text/plain' } })
+      const r = await authFetch(src, { headers: { Accept: 'application/ld+json, application/json, text/markdown, text/plain' } })
       if (!r.ok) throw new Error(`load ${src} → ${r.status}`)
+      const cross = new URL(src, location.href).origin !== location.origin
       const ct = r.headers.get('content-type') || ''
-      if (ct.includes('json')) return { doc: await r.json(), from: src }
-      return { doc: { 'schema:text': await r.text() }, from: src }   // a raw .md URL works too
+      if (ct.includes('json')) return { doc: await r.json(), from: { url: src, kind: 'jsonld', cross } }
+      return { doc: { 'schema:text': await r.text() }, from: { url: src, kind: 'md', cross } }
     }
     const r = await fetch('sample.jsonld')
-    return { doc: await r.json(), from: 'sample.jsonld' }
+    return { doc: await r.json(), from: null }     // sample saves as a new map, never overwrites itself
   }
-
-  // tolerant extraction: markdown payload (preferred) or a prebuilt markmap node tree
   function extract(doc) {
     const nodes = doc['@graph'] ? [].concat(doc['@graph']) : [doc]
     const hasMd = (x) => S(x, 'schema:text', 'mm:markdown', 'markdown', 'text', 'schema:articleBody', 'https://schema.org/text')
     const n = nodes.find((x) => /markmap/i.test(JSON.stringify(x['@type'] || ''))) || nodes.find(hasMd) || nodes[0]
-    return {
-      md: val(hasMd(n)),
-      tree: S(n, 'mm:root', 'root'),
-      title: val(S(n, 'schema:name', 'name', 'dc:title', 'title', 'https://schema.org/name')) || ''
-    }
+    return { md: val(hasMd(n)), tree: S(n, 'mm:root', 'root') }
   }
 
-  try {
-    const { doc, from } = await loadDoc()
-    const { md, tree, title } = extract(doc)
-    if (title) { $('#docTitle').textContent = title; document.title = title + ' · markmap' }
-    if (from) { const a = $('#srcLink'); a.href = from; a.style.display = '' }
+  // --- save -------------------------------------------------------------------
+  function saveFailed(r) {
+    if (r.status === 401 || r.status === 403) toast('No write access — sign in (pill, bottom-right)')
+    else toast('Save failed (' + r.status + ')')
+  }
+  async function ensureMapsContainer() {
+    try {
+      const h = await authFetch(MAPS, { method: 'HEAD' })
+      if (h.ok) return
+      await authFetch(MAPS, { method: 'PUT', headers: { 'Content-Type': 'text/turtle', 'Link': '<http://www.w3.org/ns/ldp#BasicContainer>; rel="type"' }, body: '' })
+    } catch { /* the PUT below will surface any real error */ }
+  }
+  async function save() {
+    if (!FROM || FROM.cross) return saveAs()
+    const r = FROM.kind === 'md'
+      ? await authFetch(FROM.url, { method: 'PUT', headers: { 'Content-Type': 'text/markdown' }, body: MD })
+      : await authFetch(FROM.url, { method: 'PUT', headers: { 'Content-Type': 'application/ld+json' }, body: JSON.stringify(envelope(MD), null, 2) })
+    if (!r.ok) return saveFailed(r)
+    DIRTY = false; setHeader(); toast('Saved')
+  }
+  async function saveAs() {
+    const name = prompt('Save map as…', slugify(titleOf(MD)))
+    if (!name) return
+    const url = MAPS + slugify(name) + '.jsonld'
+    await ensureMapsContainer()
+    const r = await authFetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/ld+json' }, body: JSON.stringify(envelope(MD), null, 2) })
+    if (!r.ok) return saveFailed(r)
+    FROM = { url, kind: 'jsonld', cross: false }
+    DIRTY = false; setHeader()
+    history.replaceState(null, '', '?src=' + encodeURIComponent(url))
+    const a = $('#srcLink'); a.href = url; a.style.display = ''
+    toast('Saved → ' + url)
+  }
 
-    const { Transformer, Markmap, deriveOptions } = window.markmap
-    let root, opts = null
-    if (md) {
-      const res = new Transformer().transform(String(md))
-      root = res.root
-      if (res.frontmatter && res.frontmatter.markmap) opts = deriveOptions(res.frontmatter.markmap)
-    } else if (tree) {
-      root = tree
-    } else {
-      throw new Error('No markdown (schema:text) or node tree (mm:root) in the document.')
-    }
-    const mm = Markmap.create($('#mm'), opts, root)
-    $('#fitBtn').onclick = () => mm.fit()
+  // --- edit -------------------------------------------------------------------
+  function setEditing(on) {
+    document.body.classList.toggle('editing', on)
+    $('#editBtn').textContent = on ? 'View' : 'Edit'
+    if (on) { $('#editor').value = MD; $('#editor').focus() }
+    requestAnimationFrame(() => mm && mm.fit())
+  }
+  let deb = 0
+  $('#editor').addEventListener('input', () => {
+    MD = $('#editor').value; DIRTY = true
+    clearTimeout(deb); deb = setTimeout(() => { renderMap(MD); setHeader() }, 250)
+  })
+  $('#editBtn').onclick = () => setEditing(!document.body.classList.contains('editing'))
+  $('#saveBtn').onclick = () => save()
+  $('#newBtn').onclick = () => {
+    if (DIRTY && !confirm('Discard unsaved changes?')) return
+    MD = TEMPLATE; FROM = null; DIRTY = true
+    renderMap(MD); setHeader(); setEditing(true)
+    history.replaceState(null, '', location.pathname)
+    $('#srcLink').style.display = 'none'
+  }
+  $('#fitBtn').onclick = () => mm && mm.fit()
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (document.body.classList.contains('editing')) save() }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'e') { e.preventDefault(); $('#editBtn').click() }
+  })
+  addEventListener('beforeunload', (e) => { if (DIRTY) { e.preventDefault(); e.returnValue = '' } })
+
+  // --- boot -------------------------------------------------------------------
+  try {
+    if (window.xlogin && window.xlogin.ready) { try { await window.xlogin.ready } catch { /* render anyway */ } }
+    const { doc, from } = await loadDoc()
+    const { md, tree } = extract(doc)
+    FROM = from
+    if (from && from.url) { const a = $('#srcLink'); a.href = from.url; a.style.display = '' }
+    if (md) { MD = String(md); renderMap(MD); setHeader() }
+    else if (tree) { mm = Markmap.create($('#mm'), null, tree); $('#editBtn').style.display = 'none' } // tree docs are view-only
+    else throw new Error('No markdown (schema:text) or node tree (mm:root) in the document.')
   } catch (e) {
     document.getElementById('map').innerHTML = '<div class="err">' + String((e && e.message) || e).replace(/</g, '&lt;') + '</div>'
   }
